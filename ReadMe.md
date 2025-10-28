@@ -1,11 +1,11 @@
-lyf — Lightweight Bash TCP Port Scanner
+**lyf — Lightweight Bash TCP Port Scanner**
 
 lyf is a small, pure-bash TCP port scanner that uses a worker-pool to scan targets quickly with minimal process churn.
 It’s designed to be easy to drop in a repo, install, and run from the command line.
 
-Important: Only scan hosts you own or have explicit permission to test. Unauthorized scanning can be illegal.
+**Important**: Only scan hosts you own or have explicit permission to test. Unauthorized scanning can be illegal.
 
-Features
+**Features**
 
 Pure Bash (uses /dev/tcp and timeout), no external scanning engine required.
 
@@ -14,19 +14,9 @@ Persistent worker-pool to reduce process churn and increase speed.
 Scans a configurable port range (default 1-65535) with configurable timeout and concurrency.
 
 Prints open ports live to the terminal (no output files).
-
-Files in this repo
-
-lyf — main scanner script (make executable: chmod +x lyf)
-
-install.sh — optional installer that copies lyf to /usr/local/bin
-
-.gitattributes — forces LF line endings for shell scripts (recommended)
-
-README.md — this file
-
+**
 Quickstart
-
+**
 Clone the repository, install (optional), and run:
 
 git clone https://github.com/harshithvarma01/lyfscan.git
@@ -38,11 +28,11 @@ bash install.sh
 lyf scan https://example.com
 
 
-Usage
+**Usage**
 lyf scan <url-or-host> [-t timeout] [-c concurrency] [-r range] [-h]
 
 
-Options:
+**Options:**
 
 -t timeout — per-connection timeout in seconds (supports fractions). Default: 0.6
 
@@ -84,6 +74,6 @@ Very short timeouts can cause false negatives; increase -t slightly.
 
 Network devices (IDS/IPS/firewall) may drop or rate-limit scanning traffic.
 
-Security & Legal
+**Security & Legal**
 
 This tool is provided for legitimate security testing and educational use. You are responsible for ensuring you have permission to scan targets. The author is not responsible for misuse.
