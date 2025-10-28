@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# lyf - worker-pool TCP port scanner (prints open ports live)
+# Usage: lyf scan <url-or-host> [-t timeout] [-c concurrency] [-r range] [-h]
+# Example: ./lyf scan https://example.com -t 0.5 -c 800 -r 1-65535
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+PROG="$(basename "$0")"
+VERSION="0.3-workerpool"
+
+DEFAULT_TIMEOUT="0.6"     # seconds (can be fractional)
+DEFAULT_CONCURRENCY=400   # number of persistent workers
+DEFAULT_RANGE="1-65535"   # default full-range
+
+usage() {
+  cat <<EOF
+$PROG $VERSION
+Usage:
+  $PROG scan <url-or-host> [-t timeout] [-c concurrency] [-r range] [-h]
+
+Options:
+  -t timeout      per-connection timeout in seconds (supports fractions). Default: $DEFAULT_TIMEOUT
+  -c concurrency  number of persistent worker processes. Default: $DEFAULT_CONCURRENCY
+  -r range        port range (format: start-end). Default: $DEFAULT_RANGE
+  -h              help
+
+Notes:
+  - Uses /dev/tcp connect (TCP connect scan).
+  - Prints open ports live to the terminal; no files.
+  - Increase concurrency for speed, but watch system limits (ulimit -n) and network/target throttling.
+  - Only scan targets you are authorized to test.
+EOF
+  exit 1
+}
+
+# require timeout binary
+if ! command -v timeout >/dev/null 2>&1; then
+  echo "ERROR: 'timeout' not found. Install coreutils."
+  exit 2
+fi
+
+if [ $# -lt 1 ]; then usage; fi
+CMD="$1"; shift
+if [ "$CMD" != "scan" ]; then echo "Unknown command: $CMD"; usage; fi
+if [ $# -lt 1 ]; then usage; fi
+
+TARGET_RAW="$1"; shift
+
+# defaults
+TIMEOUT="$DEFAULT_TIMEOUT"
+CONCURRENCY="$DEFAULT_CONCURRENCY"
+PORT_RANGE="$DEFAULT_RANGE"
+
+while getopts ":t:c:r:h" opt; do
+  case "$opt" in
+    t) TIMEOUT="$OPTARG" ;;
+    c) CONCURRENCY="$OPTARG" ;;
+    r) PORT_RANGE="$OPTARG" ;;
+    h) usage ;;
+    *) usage ;;
+  esac
+done
+
+# basic validation
+if ! [[ "$CONCURRENCY" =~ ^[0-9]+$ ]] || [ "$CONCURRENCY" -lt 1 ]; then
+  echo "Invalid concurrency: $CONCURRENCY"; exit 1
+fi
+if ! [[ "$PORT_RANGE" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+  echo "Port range must be like 1-65535"; exit 1
+fi
+PR_A=${BASH_REMATCH[1]}; PR_B=${BASH_REMATCH[2]}
+if [ "$PR_A" -le "$PR_B" ]; then
+  PORT_START="$PR_A"; PORT_END="$PR_B"
+else
+  PORT_START="$PR_B"; PORT_END="$PR_A"
+fi
+
+# extract host from URL
+extract_host() {
+  local raw="$1"
+  raw="${raw#http://}"; raw="${raw#https://}"
+  raw="${raw%%/*}"; raw="${raw%%\?*}"; raw="${raw%%\#*}"
+  raw="${raw##*@}"; raw="${raw%%:*}"
+  printf '%s' "$raw"
+}
+TARGET_HOST="$(extract_host "$TARGET_RAW")"
+if [ -z "$TARGET_HOST" ]; then echo "Failed to parse host"; exit 1; fi
+
+# resolve IP
+resolve_ip() {
+  local host="$1"
+  local ip=""
+  if command -v getent >/dev/null 2>&1; then
+    ip="$(getent ahosts "$host" | awk '/STREAM|STREAM/ {print $1; exit} /^[0-9]/ {print $1; exit}')"
+  fi
+  if [ -z "$ip" ]; then
+    ip="$(ping -c1 -W1 "$host" 2>/dev/null | head -n1 | grep -oE '\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\)' | tr -d '()')"
+  fi
+  printf '%s' "$ip"
+}
+IP="$(resolve_ip "$TARGET_HOST")"
+if [ -z "$IP" ]; then echo "Could not resolve $TARGET_HOST"; exit 3; fi
+
+echo "Scanning $TARGET_HOST -> $IP"
+echo "Ports: ${PORT_START}-${PORT_END}  Timeout: ${TIMEOUT}s  Workers: ${CONCURRENCY}"
+echo "Press Ctrl+C to abort."
+
+# create a named pipe for ports
+FIFO="/tmp/lyf_ports.$$"
+mkfifo "$FIFO" || { echo "Failed to create FIFO"; exit 1; }
+
+# worker function (runs as background process)
+worker() {
+  # Each worker reads from the FIFO until EOF
+  while IFS= read -r port; do
+    # skip empty lines
+    [ -z "$port" ] && continue
+    # Attempt to connect with timeout. Using timeout spawns a short-lived process,
+    # but the persistent worker reduces process churn significantly.
+    if timeout "$TIMEOUT" bash -c ">/dev/tcp/${IP}/${port}" >/dev/null 2>&1; then
+      printf "OPEN  %5s/tcp\n" "$port"
+    fi
+  done < "$FIFO"
+}
+
+# spawn persistent workers
+pids=()
+for i in $(seq 1 "$CONCURRENCY"); do
+  worker & pids+=($!)
+done
+
+# feed ports into FIFO (writer) and then close it
+(
+  for p in $(seq "$PORT_START" "$PORT_END"); do
+    printf '%s\n' "$p"
+  done
+) > "$FIFO" & writer_pid=$!
+
+# wait for writer to finish, then wait for workers to drain
+wait "$writer_pid" 2>/dev/null || true
+# closing writer causes FIFO readers to see EOF and exit
+# wait for workers
+wait "${pids[@]}" 2>/dev/null || true
+
+# cleanup
+rm -f "$FIFO"
+
+echo
+echo "Scan complete."
+exit 0
