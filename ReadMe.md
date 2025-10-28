@@ -1,4 +1,4 @@
-#**lyf — Lightweight Bash TCP Port Scanner**
+# **lyf — Lightweight Bash TCP Port Scanner**
 
 lyf is a small, pure-bash TCP port scanner that uses a worker-pool to scan targets quickly with minimal process churn.
 It’s designed to be easy to drop in a repo, install, and run from the command line.
